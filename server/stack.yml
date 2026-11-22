@@ -481,7 +481,7 @@ services:
   # Eigene Oberfläche auf Port 8200. Anmeldung = Anmeldung der Bauportal-Kopie (Cookie gilt für alle Ports dieses Servers).
   # Claude bedient die Kopie über deren eigene Schnittstellen – mit den Rechten der angemeldeten Person.
   ki:
-    image: ghcr.io/matthiasknauff/bauportal-ki/ki:${KI_VERSION:-f9e5523c1967d3d56e7186b0dd3dc92f8b62b00e}
+    image: ghcr.io/matthiasknauff/bauportal-ki/ki:${KI_VERSION:-dc3bbe9872974a0992cf25549b0f897d4c08e928}
     container_name: bauportal_ki_agent
     restart: unless-stopped
     depends_on:
