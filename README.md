@@ -16,7 +16,7 @@ Browser ──► :8200 Bauportal KI ──► Claude (anonymisiert, mit Kostend
                  │
                  └──► AVA der Kopie (:8097, intern) – mit dem Cookie der angemeldeten Person
                          │
-                         └──► Datenbank der Kopie ◄── „Echte Projekte neu holen“ (pg_dump von Docker 2 per SSH)
+                         └──► Datenbank der Kopie ◄── „Echte Projekte neu holen“ (neueste Sicherung vom Dateiserver)
 ```
 
 ## Wie Claude arbeitet
@@ -55,18 +55,13 @@ Alles, was an Claude geht, wird anonymisiert (`ki/schutz.py`, aufbauend auf dem 
    | `ANTHROPIC_API_KEY` | eigener Schlüssel für diese Instanz (Pflicht) |
    | `KI_DECKEL_EUR` | Monatsdeckel, Standard 50 (später in der Oberfläche änderbar, Klick auf die Kosten) |
    | `KI_MODELL` | Standard `claude-sonnet-5-5` |
-   | `PROD_SSH` | `kopie@<IP von Docker 2>` – für „Echte Projekte neu holen“ |
+   | `KOPIE_PFAD` | Ordner der Bauportal-Sicherungen auf dem Dateiserver, wie im Bauportal unter Verwaltung → Sicherung eingetragen |
+   | `KOPIE_BENUTZER`, `KOPIE_KENNWORT`, `KOPIE_DOMAIN` | Zugang zum Dateiserver (wie für die Ablage) – Lesen genügt |
    | `SECRET_KEY` | beliebig |
 
-4. **Kopie einrichten** (SSH-Schlüssel, der auf Docker 2 NUR die Sicherung ausführen darf):
-   ```bash
-   # auf dem KI-LXC
-   docker exec bauportal_ki_agent ssh-keygen -t ed25519 -N "" -f /root/.ssh/id_ed25519
-   docker exec bauportal_ki_agent cat /root/.ssh/id_ed25519.pub
-   # auf Docker 2: Benutzer „kopie“ in der Gruppe docker, in /home/kopie/.ssh/authorized_keys EINE Zeile:
-   command="docker exec bauplattform_db pg_dump -U bautagebuch -Fc bautagebuch",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding ssh-ed25519 AAAA… 
-   ```
-   Durch `command=` kann der Schlüssel auf Docker 2 nichts anderes als diese eine Sicherung.
+4. **Woher die Kopie kommt:** Das Bauportal legt seine Datenbanksicherungen ohnehin auf den Dateiserver (Ordner `Datenbank`).
+   Diese Instanz liest von dort die neueste – nur lesend, ohne Zugang zu Docker 2. Stand = letzte Sicherung; für einen frischeren
+   Stand im Bauportal unter Verwaltung → Sicherung „jetzt sichern“ und „auf den Dateiserver kopieren“.
 5. **Erste Kopie** auf dem KI-LXC: `docker exec bauportal_ki_agent python -m ki.kopie` (danach gibt es die gewohnten Konten).
    Dann `http://<KI-LXC>:8200` öffnen und mit dem gewohnten Konto anmelden. Später holt ein Administrator neue Stände über den
    Knopf **„Echte Projekte neu holen“** oben; danach einmal neu anmelden (die Sitzungen kommen mit der Kopie).

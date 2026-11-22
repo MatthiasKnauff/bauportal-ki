@@ -494,10 +494,12 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY fehlt – in Portainer eintragen}
       KI_MODELL: ${KI_MODELL:-claude-sonnet-5-5}
       KI_DECKEL_EUR: ${KI_DECKEL_EUR:-50}
-      PROD_SSH: ${PROD_SSH:-}            # z. B. kopie@192.168.x.y – Docker 2, nur für „Echte Projekte neu holen“
-      PROD_DB_CONTAINER: ${PROD_DB_CONTAINER:-bauplattform_db}
-    volumes:
-      - ki_ssh:/root/.ssh                # Schlüssel für die Kopie (README → „Kopie einrichten“)
+      # „Echte Projekte neu holen“: Ordner der Bauportal-Sicherungen auf dem Dateiserver (nur lesen) – wie im Bauportal unter
+      # Verwaltung → Sicherung eingetragen. Nach der ersten Kopie kennt die Kopie Pfad und Zugang selbst.
+      KOPIE_PFAD: ${KOPIE_PFAD:-}
+      KOPIE_BENUTZER: ${KOPIE_BENUTZER:-}
+      KOPIE_KENNWORT: ${KOPIE_KENNWORT:-}
+      KOPIE_DOMAIN: ${KOPIE_DOMAIN:-}
 
 volumes:   # eigene Volumes des Testservers – werden beim ersten Start leer angelegt
   bautagebuch_data:
@@ -506,5 +508,3 @@ volumes:   # eigene Volumes des Testservers – werden beim ersten Start leer an
     name: ${DB18_VOLUME:-bauportal_ki_pg18}   # PostgreSQL 18 (seit 15.11.2026); das alte Volume darüber bleibt unverändert liegen
   ollama_data:
     name: bauportal_ki_ollama      # Modelle der eigenen KI
-  ki_ssh:
-    name: bauportal_ki_ssh

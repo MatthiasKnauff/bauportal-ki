@@ -74,7 +74,7 @@ def me():
     with db.tx() as c:
         return jsonify(name=g.user.get("name"), admin=bool(g.user.get("is_admin")), modell=agent.MODELL,
                        kosten=round(agent.monat(c), 2), deckel=agent.deckel(c), kopie=kopie.ZUSTAND,
-                       kopie_moeglich=bool(os.environ.get("PROD_SSH")))
+                       kopie_moeglich=True)
 
 
 @app.get("/api/gespraeche")

@@ -266,6 +266,44 @@ class Zug(unittest.TestCase):
             agent.zug(self.tx, self.gid, {"id": 1}, self.bp, "Hallo", claude=lambda n: self.fail("darf nicht senden"))
 
 
+class Kopie(unittest.TestCase):
+    """Neueste Sicherung vom Dateiserver – mit dem Baustein des Bauportals (remote.Folder statt SMB)."""
+
+    def test_neueste_sicherung_und_trennen(self):
+        import tempfile
+        from ki import kopie
+        if not os.environ.get("BPCORE"):
+            self.skipTest("Bauportal nicht gefunden")
+        sys.path.insert(0, os.path.join(os.path.dirname(os.environ["BPCORE"]), "bautagebuch"))
+        con, tx = datenbank()
+        self.addCleanup(con.close)
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "Datenbank"))
+            for n in ("bau-20261120-020000-nacht.dump", "bau-20261122-020000-nacht.dump", "notiz.txt"):
+                with open(os.path.join(d, "Datenbank", n), "wb") as f:
+                    f.write(n.encode() * 100)
+            os.environ["KOPIE_PFAD"] = d
+            self.addCleanup(os.environ.pop, "KOPIE_PFAD")
+            gesehen = []
+            orig = kopie.subprocess.run
+
+            def run(cmd, **k):
+                with open(cmd[-1], "rb") as f:
+                    gesehen.append(f.read()[:30])
+                return types.SimpleNamespace(returncode=0, stderr=b"")
+            kopie.subprocess.run = run
+            self.addCleanup(setattr, kopie.subprocess, "run", orig)
+            con.execute("INSERT INTO settings VALUES ('m365_secret', 'geheim'), ('mail_from', 'buero@gk3.de')")
+            con.execute("INSERT INTO bp_store(key, data) VALUES ('bauherren:einst', '{}'), ('postfaecher:1', '{}'), ('anderes', '1')")
+            kopie.ZUSTAND["laeuft"] = True
+            kopie._lauf("dsn", tx)
+        self.assertEqual(kopie.ZUSTAND["fehler"], "")
+        self.assertEqual(kopie.ZUSTAND["sicherung"], "bau-20261122-020000-nacht.dump")
+        self.assertTrue(gesehen[0].startswith(b"bau-20261122"))
+        self.assertEqual([r[0] for r in con.execute("SELECT key FROM settings").fetchall()], ["mail_from"])
+        self.assertEqual([r[0] for r in con.execute("SELECT key FROM bp_store").fetchall()], ["anderes"])
+
+
 class Stack(unittest.TestCase):
     def test_stack_hat_schutzschalter(self):
         import yaml

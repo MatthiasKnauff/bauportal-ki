@@ -1,20 +1,28 @@
-"""„Echte Projekte neu holen“: Kopie der Produktivdatenbank (Docker 2) in die Datenbank dieser Instanz.
+"""„Echte Projekte neu holen“: die neueste Datenbanksicherung des Bauportals vom Dateiserver in diese Instanz einspielen.
+
+Das Bauportal (Docker 2) legt seine Sicherungen ohnehin auf den Dateiserver (Verwaltung → Sicherung → „Kopie auf dem Dateiserver“,
+Ordner …\\Datenbank\\bau-JJJJMMTT-HHMMSS-<art>.dump). Von dort liest diese Instanz – mit dem Baustein des Bauportals (bautagebuch/core/remote.py),
+nur lesend. Kein Zugang zu Docker 2 nötig. Stand = letzte Sicherung (nachts; für einen frischeren Stand im Bauportal „jetzt sichern“).
 
 Ablauf (nur Administrator, läuft im Hintergrund):
-  1. per SSH auf Docker 2: pg_dump im Datenbank-Container → Datei hier (die Produktion wird nur gelesen)
+  1. neueste bau-*.dump aus dem Ordner „Datenbank“ der Sicherungs-Freigabe lesen
   2. pg_restore --clean in die eigene Datenbank (eigene Tabellen kia_… bleiben, sie sind nicht in der Sicherung)
   3. Außenverbindungen trennen – sonst würde die Kopie mit echten Zugängen arbeiten:
      Microsoft 365 / IMAP (Posteingang würde Mails abholen), Bauherrenportal (würde echte Freigaben hinausschieben),
-     Mail-Kennwort. Mails, Termine und die Ablage sperrt zusätzlich TESTSERVER=1.
+     Mail-Kennwort. Mails, Termine und Schreiben auf den Dateiserver sperrt zusätzlich TESTSERVER=1.
+Wo die Sicherungen liegen: Umgebungsvariablen KOPIE_PFAD (\\\\Server\\Freigabe\\Ordner, wie im Bauportal eingetragen), KOPIE_BENUTZER,
+KOPIE_KENNWORT, KOPIE_DOMAIN – für die erste Kopie nötig. Danach kennt die Kopie Pfad und Zugang selbst (dieselben Einstellungen wie das Bauportal).
 Die Sitzungen werden mitkopiert: angemeldet wird man mit dem gewohnten Namen und Kennwort.
 """
 import os
-import shlex
+import re
 import subprocess
+import sys
 import threading
 import time
 
-ZUSTAND = {"laeuft": False, "schritt": "", "fehler": "", "fertig": ""}
+ZUSTAND = {"laeuft": False, "schritt": "", "fehler": "", "fertig": "", "sicherung": ""}
+NAME = re.compile(r"^bau-\d{8}-\d{6}-[a-z0-9-]+\.dump$")   # wie bautagebuch/core/backups.NAME
 
 TRENNEN = [
     "DELETE FROM settings WHERE key IN ('m365_tenant','m365_client','m365_secret','mail_pass')",
@@ -22,23 +30,47 @@ TRENNEN = [
 ]
 
 
-def befehl_dump():
-    ziel = os.environ.get("PROD_SSH", "").strip()
-    if not ziel:
-        raise RuntimeError("PROD_SSH ist nicht eingetragen (Portainer → Stack → Umgebungsvariablen)")
-    cont = os.environ.get("PROD_DB_CONTAINER", "bauplattform_db")
-    innen = f"docker exec {shlex.quote(cont)} pg_dump -U bautagebuch -Fc bautagebuch"
-    return ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", ziel, innen]
+def _zugang(db_tx):
+    """Pfad und Zugang: aus den Umgebungsvariablen, sonst aus den (mitkopierten) Einstellungen des Bauportals."""
+    conf = {}
+    try:
+        with db_tx() as c:
+            conf = {r["key"]: r["value"] for r in c.execute("SELECT key, value FROM settings WHERE key IN "
+                                                            "('backup_remote','store_user','store_pass','store_domain')").fetchall()}
+    except Exception:   # noqa: BLE001 – leere Datenbank vor der ersten Kopie
+        pass
+    E = os.environ.get
+    return {"pfad": E("KOPIE_PFAD") or conf.get("backup_remote", ""), "user": E("KOPIE_BENUTZER") or conf.get("store_user", ""),
+            "pass": E("KOPIE_KENNWORT") or conf.get("store_pass", ""), "domain": E("KOPIE_DOMAIN") or conf.get("store_domain", "")}
+
+
+def quelle(db_tx):
+    """Ordner der Sicherungen als Ziel-Objekt des Bauportals (Smb oder eingebundener Ordner)."""
+    z = _zugang(db_tx)
+    if not z["pfad"]:
+        raise RuntimeError("Es ist nicht eingetragen, wo die Sicherungen des Bauportals liegen (KOPIE_PFAD in Portainer).")
+    if "/app/bautagebuch" not in sys.path:
+        sys.path.insert(0, "/app/bautagebuch")
+    from core import remote
+    m = re.match(r"^\\\\([^\\]+)\\([^\\]+)\\?(.*)$", z["pfad"].strip().replace("/", "\\"))
+    if m:
+        return remote.Smb(m.group(1), m.group(2), m.group(3).replace("\\", "/").strip("/"), z["user"], z["pass"], z["domain"])
+    if z["pfad"].startswith("/"):
+        return remote.Folder(z["pfad"])
+    raise RuntimeError("KOPIE_PFAD bitte als \\\\Server\\Freigabe\\Ordner eintragen.")
 
 
 def _lauf(dsn, db_tx):
     datei = "/tmp/produktion.dump"
     try:
-        ZUSTAND.update(schritt="hole Sicherung von Docker 2 …", fehler="")
+        ZUSTAND.update(schritt="suche die neueste Sicherung …", fehler="")
+        q = quelle(db_tx)
+        namen = sorted(e["name"] for e in q.listdir("Datenbank") if not e["dir"] and NAME.match(e["name"]))
+        if not namen:
+            raise RuntimeError("Im Ordner „Datenbank“ der Sicherung liegt keine bau-…dump.")
+        ZUSTAND.update(schritt=f"hole {namen[-1]} …", sicherung=namen[-1])
         with open(datei, "wb") as f:
-            p = subprocess.run(befehl_dump(), stdout=f, stderr=subprocess.PIPE, timeout=3600)
-        if p.returncode or os.path.getsize(datei) < 1000:
-            raise RuntimeError("Sicherung fehlgeschlagen: " + p.stderr.decode("utf-8", "replace")[-400:])
+            f.write(q.read("Datenbank/" + namen[-1]))
         ZUSTAND["schritt"] = "spiele die Kopie ein …"
         p = subprocess.run(["pg_restore", "--clean", "--if-exists", "--no-owner", "--no-privileges", "-d", dsn, datei],
                            stderr=subprocess.PIPE, timeout=3600, env={**os.environ})
@@ -63,7 +95,8 @@ def _lauf(dsn, db_tx):
 def starten(dsn, db_tx):
     if ZUSTAND["laeuft"]:
         return False
-    befehl_dump()   # prüft PROD_SSH vorab – Fehler gleich an die Oberfläche
+    if not _zugang(db_tx)["pfad"]:   # gleich an die Oberfläche melden
+        raise RuntimeError("Es ist nicht eingetragen, wo die Sicherungen des Bauportals liegen (KOPIE_PFAD in Portainer).")
     ZUSTAND["laeuft"] = True
     threading.Thread(target=_lauf, args=(dsn, db_tx), daemon=True).start()
     return True
@@ -73,4 +106,4 @@ if __name__ == "__main__":   # erste Kopie ohne Oberfläche: docker exec bauport
     from bpcore import db
     ZUSTAND["laeuft"] = True
     _lauf(db.DSN, db.tx)
-    print(ZUSTAND["fehler"] or f"Kopie fertig ({ZUSTAND['fertig']})")
+    print(ZUSTAND["fehler"] or f"Kopie fertig ({ZUSTAND['fertig']}, {ZUSTAND['sicherung']})")

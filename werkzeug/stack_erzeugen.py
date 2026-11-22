@@ -31,10 +31,12 @@ KI = """
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY fehlt – in Portainer eintragen}
       KI_MODELL: ${KI_MODELL:-claude-sonnet-5-5}
       KI_DECKEL_EUR: ${KI_DECKEL_EUR:-50}
-      PROD_SSH: ${PROD_SSH:-}            # z. B. kopie@192.168.x.y – Docker 2, nur für „Echte Projekte neu holen“
-      PROD_DB_CONTAINER: ${PROD_DB_CONTAINER:-bauplattform_db}
-    volumes:
-      - ki_ssh:/root/.ssh                # Schlüssel für die Kopie (README → „Kopie einrichten“)
+      # „Echte Projekte neu holen“: Ordner der Bauportal-Sicherungen auf dem Dateiserver (nur lesen) – wie im Bauportal unter
+      # Verwaltung → Sicherung eingetragen. Nach der ersten Kopie kennt die Kopie Pfad und Zugang selbst.
+      KOPIE_PFAD: ${KOPIE_PFAD:-}
+      KOPIE_BENUTZER: ${KOPIE_BENUTZER:-}
+      KOPIE_KENNWORT: ${KOPIE_KENNWORT:-}
+      KOPIE_DOMAIN: ${KOPIE_DOMAIN:-}
 """
 
 
@@ -52,10 +54,9 @@ def erzeugen(vorlage: str, version: str) -> str:
                "ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-" + version + "}", t)
     t = re.sub(r"container_name: bauplattform_(test_)?", "container_name: bauportal_ki_", t)
     t = re.sub(r"bauplattform_test_", "bauportal_ki_", t)
-    # KI-Container vor den Volumes einfügen, Volume für den SSH-Schlüssel dazu
+    # KI-Container vor den Volumes einfügen
     i = t.index("\nvolumes:")
     t = t[:i].rstrip() + "\n" + KI + t[i:]
-    t = t.rstrip() + "\n  ki_ssh:\n    name: bauportal_ki_ssh\n"
     assert "TESTSERVER: \"1\"" in t, "Schutzschalter TESTSERVER fehlt in der Vorlage"
     return t
 

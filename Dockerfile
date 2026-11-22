@@ -2,8 +2,7 @@
 # Kern (bpcore: Anmeldung, Datenbank, Anonymisierung, KI-Verbrauch) wird benutzt, nicht kopiert.
 ARG BP_VERSION=v2026.11.314
 FROM ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION}
-# ssh: nur für „Echte Projekte neu holen“ (pg_dump auf Docker 2); pg_restore bringt das Bauportal-Image schon mit
-RUN apt-get update && apt-get install -y --no-install-recommends openssh-client && rm -rf /var/lib/apt/lists/*
+# pg_restore und der SMB-Zugang zum Dateiserver (für „Echte Projekte neu holen“) kommen mit dem Bauportal-Image
 COPY ki /app/ki
 WORKDIR /app
 ENV APP=ki
