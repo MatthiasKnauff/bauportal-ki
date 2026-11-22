@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bauportal KI</title>
+<link rel="stylesheet" href="/static/ki.css">
+</head>
+<body>
+<header>
+  <b>Bauportal <span class="ki">KI</span></b>
+  <span class="test">Kopie · Claude arbeitet mit</span>
+  <span class="los"></span>
+  <span id="kosten" title="Kosten Claude in diesem Monat / Deckel"></span>
+  <button id="kopie" class="leise" hidden>Echte Projekte neu holen</button>
+  <a id="portal" class="leise" target="_blank">Bauportal-Kopie ↗</a>
+  <span id="wer"></span>
+</header>
+<main>
+  <nav>
+    <button id="neu">＋ Neues Gespräch</button>
+    <ul id="liste"></ul>
+  </nav>
+  <section id="gespraech">
+    <div id="verlauf"><p class="leer">Schreib Claude, was in der Ausschreibung zu tun ist – z. B. „Leg im Projekt Tierheim ein LV Rohbau aus dem Gebäudemodell an“.</p></div>
+    <div id="arbeit" hidden><span class="punkt"></span><span id="arbeit-text">Claude arbeitet …</span></div>
+    <form id="eingabe">
+      <textarea id="text" rows="2" placeholder="Nachricht an Claude …"></textarea>
+      <button type="submit">Senden</button>
+    </form>
+  </section>
+  <aside>
+    <h3>Arbeitsschritt</h3>
+    <div id="vorschau"><p class="leer">Noch nichts vorgemerkt. Claude ändert nichts, bevor du hier „Ausführen“ drückst.</p></div>
+    <div id="knoepfe" hidden>
+      <button id="verwerfen" class="leise">Verwerfen</button>
+      <button id="ausfuehren">Ausführen</button>
+    </div>
+    <h3>Ausgeführt</h3>
+    <ul id="schritte"></ul>
+  </aside>
+</main>
+<div id="meldung" hidden></div>
+<script src="/static/ki.js"></script>
+</body>
+</html>

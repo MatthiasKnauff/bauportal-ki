@@ -1,0 +1,545 @@
+# =============================================================================
+# bauportal-ki – Bauportal-Kopie mit Claude-Agent (eigener LXC)
+# ERZEUGT von werkzeug/stack_erzeugen.py aus server/test.yml des Bauportals – nicht von Hand ändern.
+# Schutz wie der Testserver: TESTSERVER=1 (Ablage nur lesen, keine Mails, keine Termine), eigene Volumes.
+# Daten: Kopie der echten Projekte, geholt über den Knopf im KI-Container (Außenverbindungen werden dabei getrennt).
+# =============================================================================
+name: bauportal-ki
+
+x-env: &env
+  TESTSERVER: "1"                         # Kopie zum Ausprobieren: Ablage nur lesen, keine Mails, keine Kalendertermine
+  TZ: ${TZ:-Europe/Berlin}
+  DATABASE_URL: "postgresql://bautagebuch@bautagebuch_db:5432/bautagebuch"
+  PGPASSWORD: ${DB_PASSWORD:?DB_PASSWORD fehlt – in Portainer unter Environment variables eintragen}
+  TRUST_PROXY: ${TRUST_PROXY:-0}
+  COOKIE_SECURE: ${COOKIE_SECURE:-0}
+  SSO_COOKIE_DOMAIN: ${SSO_COOKIE_DOMAIN:-}
+  BAUTAGEBUCH_PORT: ${BAUTAGEBUCH_PORT:-8080}
+  GANTT_PORT: ${GANTT_PORT:-8082}
+  PORTAL_PORT: ${PORTAL_PORT:-8090}
+  ADMIN_PORT: ${ADMIN_PORT:-8091}
+  ADRESSEN_PORT: ${ADRESSEN_PORT:-8093}
+  BAUKOSTEN_PORT: ${BAUKOSTEN_PORT:-8094}
+  BAUTAGEBUCH_URL: ${BAUTAGEBUCH_URL:-}
+  GANTT_URL: ${GANTT_URL:-}
+  PORTAL_URL: ${PORTAL_URL:-}
+  ADMIN_URL: ${ADMIN_URL:-}
+  ADRESSEN_URL: ${ADRESSEN_URL:-}
+  BAUKOSTEN_URL: ${BAUKOSTEN_URL:-}
+  # Alle Apps unter EINER Adresse, unterschieden durch den Pfad (/bautagebuch, /bauzeitenplan, /adressen, /baukosten, /verwaltung).
+  # Im Nginx Proxy Manager reicht ein Eintrag auf Port 8090 (Verteiler). Eigene *_URL-Werte oben haben Vorrang.
+  BAUPORTAL_URL: ${BAUPORTAL_URL:-}
+  SERVER_HOST: ${SERVER_HOST:-}   # IP/Name des Servers – für Links zu Apps ohne eigene Adresse (optional)
+  BAUTAGEBUCH_INTERNAL: http://bautagebuch:8000
+  DIENSTE_INTERNAL: http://dienste:8102
+  GANTT_INTERNAL: http://gantt:8082
+  PORTAL_INTERNAL: http://portal:8090
+  ADMIN_INTERNAL: http://admin:8091
+  ADRESSEN_INTERNAL: http://adressen:8093
+  BAUKOSTEN_INTERNAL: http://baukosten:8094
+  AUFGABEN_INTERNAL: http://aufgaben:8095
+  PLAENE_INTERNAL: http://plaene:8096
+  AVA_INTERNAL: http://ava:8097
+  KOMMUNIKATION_INTERNAL: http://kommunikation:8098
+  BAUDATEN_INTERNAL: http://baudaten:8099
+  ZEITEN_INTERNAL: http://zeiten:8101
+  HONORAR_INTERNAL: http://honorar:8103
+  BAUANTRAG_INTERNAL: http://bauantrag:8104
+  WAERMESCHUTZ_INTERNAL: http://waermeschutz:8105
+  WIKI_INTERNAL: http://wiki:8106
+  AKQUISE_INTERNAL: http://akquise:8107
+  PERSONAL_INTERNAL: http://personal:8108
+  GEBAEUDEMODELL_INTERNAL: http://gebaeudemodell:8109
+  # KI für alle Apps (Auswahl oben in der Kopfleiste). Ollama läuft als eigener Container im Docker-Netz.
+  OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+  # Bauportal Office (Collabora Online = „Nextcloud Office“, Dienst „office“ unten): Adresse für den Browser – Pfad /office unter der
+  # Bauportal-Adresse (kein eigener DNS-Eintrag), z. B. https://bauportal.gk3-architektur.de/office. Leer = aus.
+  OFFICE_URL: ${OFFICE_URL:-}
+  OFFICE_PFAD: ${OFFICE_PFAD:-/office}
+  OFFICE_INTERNAL: http://office:9980
+  OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+  OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL-qwen3-vl:4b}   # liest Pläne (Bilder); nicht gesetzt = qwen3-vl:4b, leer = keins
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+
+services:
+  bautagebuch_db:
+    image: postgres:18
+    container_name: bauportal_ki_db   # Daten der ganzen Bauplattform – seit 15.11.2026 PostgreSQL 18 in eigenem Volume (Umzug am 15.11.2026)
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bautagebuch
+      POSTGRES_DB: bautagebuch
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD fehlt}
+      TZ: ${TZ:-Europe/Berlin}
+    volumes:
+      - bautagebuch_pg18:/var/lib/postgresql   # ab 18 liegt der Datenordner darunter (18/docker), nicht mehr in …/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bautagebuch -d bautagebuch"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # Hintergrundaufgaben der Plattform: Datenbank einrichten, tägliche Datensicherung, Erinnerungen (bautagebuch/dienste.py).
+  # Alle Apps warten auf diesen Container – das Bautagebuch ist eine normale App.
+  dienste:
+    image: ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-v2026.11.314}
+    working_dir: /app/bautagebuch
+    container_name: bauportal_ki_dienste
+    restart: unless-stopped
+    depends_on:
+      bautagebuch_db: { condition: service_healthy }
+    environment:
+      <<: *env
+      APP: dienste
+    volumes:
+      - bautagebuch_data:/data
+
+  bautagebuch:
+    image: ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-v2026.11.314}
+    working_dir: /app/bautagebuch   # Ordner der App im gemeinsamen Image (für „docker compose exec bautagebuch python …“)
+    container_name: bauportal_ki_bautagebuch
+    restart: unless-stopped
+    depends_on:
+      dienste: { condition: service_healthy }
+    ports:
+      - "${BAUTAGEBUCH_PUBLISH:-8080}:8000"
+    environment:
+      <<: *env
+      APP: bautagebuch
+      DIENSTE: extern   # Datenbank einrichten, sichern, erinnern: macht der Container „dienste“
+      SECRET_KEY: ${SECRET_KEY:-}
+    volumes:
+      - bautagebuch_data:/data
+
+  gantt:
+    image: ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-v2026.11.314}
+    working_dir: /app/gantt   # Ordner der App im gemeinsamen Image (für „docker compose exec gantt python …“)
+    container_name: bauportal_ki_bauzeitenplan
+    restart: unless-stopped
+    depends_on:
+      dienste: { condition: service_healthy }
+    ports:
+      - "${GANTT_PUBLISH:-8082}:8082"
+    environment:
+      <<: *env
+      APP: gantt
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - bautagebuch_data:/data   # gemeinsamer Dateispeicher (bpcore/dateien.py)
+
+  portal:
+    image: ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-v2026.11.314}
+    container_name: bauportal_ki_portal
+    restart: unless-stopped
+    depends_on:
+      dienste: { condition: service_healthy }
+    # kein eigener Port: erreichbar über den Verteiler (bauportal, Port 8090)
+    environment:
+      <<: *env
+      APP_MODULE: portal
+      APP_PORT: "8090"
+    volumes:
+      - bautagebuch_data:/data   # gemeinsamer Dateispeicher (bpcore/dateien.py)
+
+  admin:
+    image: ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-v2026.11.314}
+    container_name: bauportal_ki_admin
+    restart: unless-stopped
+    depends_on:
+      portal: { condition: service_started }
+      dienste: { condition: service_healthy }
+    ports:
+      - "${ADMIN_PUBLISH:-8091}:8091"
+    environment:
+      <<: *env
+      APP_MODULE: admin
+      APP_PORT: "8091"
+    volumes:
+      - bautagebuch_data:/data   # gemeinsamer Dateispeicher (bpcore/dateien.py)
+
+  adressen:
+    image: ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-v2026.11.314}
+    container_name: bauportal_ki_adressen
+    restart: unless-stopped
+    depends_on:
+      portal: { condition: service_started }
+      dienste: { condition: service_healthy }
+    ports:
+      - "${ADRESSEN_PUBLISH:-8093}:8093"
+    environment:
+      <<: *env
+      APP_MODULE: adressen
+      APP_PORT: "8093"
+    volumes:
+      - bautagebuch_data:/data   # gemeinsamer Dateispeicher (bpcore/dateien.py)
+
+
+
+  # Verteiler: alle Apps unter einer Adresse (Pfad statt Port/Subdomain), siehe plattform/router.py
+  bauportal:
+    image: ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-v2026.11.314}
+    container_name: bauportal_ki_verteiler
+    restart: unless-stopped
+    depends_on:
+      portal: { condition: service_started }
+    ports:
+      - "${PORTAL_PUBLISH:-8090}:8090"
+    environment:
+      <<: *env
+      APP_MODULE: router
+      APP_PORT: "8090"
+      APP_THREADS: "32"
+      APP_TIMEOUT: "320"
+    volumes:
+      - bautagebuch_data:/data   # gemeinsamer Dateispeicher (bpcore/dateien.py)
+  baukosten:
+    image: ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-v2026.11.314}
+    container_name: bauportal_ki_baukosten
+    restart: unless-stopped
+    depends_on:
+      portal: { condition: service_started }
+      dienste: { condition: service_healthy }
+    ports:
+      - "${BAUKOSTEN_PUBLISH:-8094}:8094"
+    environment:
+      <<: *env
+      APP_MODULE: baukosten
+      APP_PORT: "8094"
+      APP_TIMEOUT: "300"
+    volumes:
+      - bautagebuch_data:/data   # gemeinsamer Dateispeicher (bpcore/dateien.py)
+
+  # Mängel & Erinnerungen: Mängelverfolgung aus den Bautagesberichten, Erinnerungen aus Bautagebuch, Bauzeitenplänen und eigene
+  aufgaben:
+    image: ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-v2026.11.314}
+    container_name: bauportal_ki_aufgaben
+    restart: unless-stopped
+    depends_on:
+      portal: { condition: service_started }
+      dienste: { condition: service_healthy }
+    ports:
+      - "${AUFGABEN_PUBLISH:-8095}:8095"
+    environment:
+      <<: *env
+      APP_MODULE: aufgaben
+      APP_PORT: "8095"
+    volumes:
+      - bautagebuch_data:/data   # gemeinsamer Dateispeicher (bpcore/dateien.py)
+
+  # Pläne & Dateien: Pläne im Projektordner (über das Bautagebuch), neuester Index, Versand an die Firmen, Planversandliste
+  plaene:
+    image: ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-v2026.11.314}
+    container_name: bauportal_ki_plaene
+    restart: unless-stopped
+    depends_on:
+      portal: { condition: service_started }
+      dienste: { condition: service_healthy }
+    ports:
+      - "${PLAENE_PUBLISH:-8096}:8096"
+    environment:
+      <<: *env
+      APP_MODULE: plaene
+      APP_PORT: "8096"
+      APP_TIMEOUT: "300"
+    volumes:
+      - bautagebuch_data:/data   # gemeinsamer Dateispeicher (bpcore/dateien.py)
+
+  # Ausschreibung & Abrechnung: Leistungsverzeichnisse, Angebote/Preisspiegel, Aufmaß, Rechnungsprüfung (GAEB)
+  ava:
+    image: ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-v2026.11.314}
+    container_name: bauportal_ki_ava
+    restart: unless-stopped
+    depends_on:
+      portal: { condition: service_started }
+      dienste: { condition: service_healthy }
+    ports:
+      - "${AVA_PUBLISH:-8097}:8097"
+    environment:
+      <<: *env
+      APP_MODULE: ava
+      APP_PORT: "8097"
+      APP_TIMEOUT: "300"
+    volumes:
+      - bautagebuch_data:/data   # gemeinsamer Dateispeicher (bpcore/dateien.py)
+
+  # Kommunikation: was an wen verschickt wurde (Planversand, Rügen) – je Projekt und je Kontakt
+  kommunikation:
+    image: ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-v2026.11.314}
+    container_name: bauportal_ki_kommunikation
+    restart: unless-stopped
+    depends_on:
+      portal: { condition: service_started }
+      dienste: { condition: service_healthy }
+    ports:
+      - "${KOMMUNIKATION_PUBLISH:-8098}:8098"
+    environment:
+      <<: *env
+      APP_MODULE: kommunikation
+      APP_PORT: "8098"
+      APP_TIMEOUT: "120"
+    volumes:
+      - bautagebuch_data:/data   # gemeinsamer Dateispeicher (bpcore/dateien.py)
+
+  # Zeiten: Arbeitszeit (Kommen/Gehen, Pausen, Urlaub) und Projektzeiten je Leistungsphase – Vorschläge aus der Arbeit in der Plattform
+  zeiten:
+    image: ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-v2026.11.314}
+    container_name: bauportal_ki_zeiten
+    restart: unless-stopped
+    depends_on:
+      portal: { condition: service_started }
+      dienste: { condition: service_healthy }
+    ports:
+      - "${ZEITEN_PUBLISH:-8101}:8101"
+    environment:
+      <<: *env
+      APP_MODULE: zeiten
+      APP_PORT: "8101"
+      APP_TIMEOUT: "120"
+    volumes:
+      - bautagebuch_data:/data   # gemeinsamer Dateispeicher (bpcore/dateien.py)
+
+  # Bauantrag: Antrag aus Projektdaten, Adressen, Baukosten – Bauvorlagen-Checkliste, PDF
+  bauantrag:
+    image: ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-v2026.11.314}
+    container_name: bauportal_ki_bauantrag
+    restart: unless-stopped
+    depends_on:
+      portal: { condition: service_started }
+      dienste: { condition: service_healthy }
+    ports:
+      - "${BAUANTRAG_PUBLISH:-8104}:8104"
+    environment:
+      <<: *env
+      APP_MODULE: bauantrag
+      APP_PORT: "8104"
+    volumes:
+      - bautagebuch_data:/data   # gemeinsamer Dateispeicher (bpcore/dateien.py)
+
+  # Wärmeschutz: Bauteilnachweis je Projekt – U-Wert (DIN EN ISO 6946), Tauwasser (DIN 4108-3), Höchstwerte nach GModG Anlage 7
+  waermeschutz:
+    image: ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-v2026.11.314}
+    container_name: bauportal_ki_waermeschutz
+    restart: unless-stopped
+    depends_on:
+      portal: { condition: service_started }
+      dienste: { condition: service_healthy }
+    ports:
+      - "${WAERMESCHUTZ_PUBLISH:-8105}:8105"
+    environment:
+      <<: *env
+      APP_MODULE: waermeschutz
+      APP_PORT: "8105"
+    volumes:
+      - bautagebuch_data:/data   # gemeinsamer Dateispeicher (bpcore/dateien.py)
+
+  # Wiki des Büros: Erkenntnisse aus allen Apps sammeln, wöchentlich zusammenfassen (KI), fachlich prüfen – Dateien auf „Bauportal/02 Wiki“
+  wiki:
+    image: ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-v2026.11.314}
+    container_name: bauportal_ki_wiki
+    restart: unless-stopped
+    depends_on:
+      portal: { condition: service_started }
+      dienste: { condition: service_healthy }
+    ports:
+      - "${WIKI_PUBLISH:-8106}:8106"
+    environment:
+      <<: *env
+      APP_MODULE: wiki
+      APP_PORT: "8106"
+    volumes:
+      - bautagebuch_data:/data   # gemeinsamer Dateispeicher (bpcore/dateien.py)
+
+  # Akquise (Recht „akquise“): Anfragen ohne Projekt, Dateien im Projektpfad unter „Akquise/“, Umwandeln in ein Projekt
+  akquise:
+    image: ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-v2026.11.314}
+    container_name: bauportal_ki_akquise
+    restart: unless-stopped
+    depends_on:
+      portal: { condition: service_started }
+      dienste: { condition: service_healthy }
+    ports:
+      - "${AKQUISE_PUBLISH:-8107}:8107"
+    environment:
+      <<: *env
+      APP_MODULE: akquise
+      APP_PORT: "8107"
+    volumes:
+      - bautagebuch_data:/data   # gemeinsamer Dateispeicher (bpcore/dateien.py)
+
+  # Personal: Personen, Abwesenheit und Urlaubsanträge (jede:r sich selbst, Vorgesetzte ihre Leute); Personalakte nur mit Recht „personal“
+  personal:
+    image: ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-v2026.11.314}
+    container_name: bauportal_ki_personal
+    restart: unless-stopped
+    depends_on:
+      portal: { condition: service_started }
+      dienste: { condition: service_healthy }
+    ports:
+      - "${PERSONAL_PUBLISH:-8108}:8108"
+    environment:
+      <<: *env
+      APP_MODULE: personal
+      APP_PORT: "8108"
+    volumes:
+      - bautagebuch_data:/data   # gemeinsamer Dateispeicher (bpcore/dateien.py)
+
+  # Gebäudemodell (bis 16.11.2026 „Planung“): Planstände, Bauteile, 3D, Assistent, Verknüpfungen – Daten im Kern (bpcore/modell.py)
+  gebaeudemodell:
+    image: ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-v2026.11.314}
+    container_name: bauportal_ki_gebaeudemodell
+    restart: unless-stopped
+    depends_on:
+      portal: { condition: service_started }
+      dienste: { condition: service_healthy }
+    ports:
+      - "${GEBAEUDEMODELL_PUBLISH:-8109}:8109"
+    environment:
+      <<: *env
+      APP_MODULE: gebaeudemodell
+      APP_PORT: "8109"
+    volumes:
+      - bautagebuch_data:/data   # gemeinsamer Dateispeicher (bpcore/dateien.py)
+
+  # Honorar (nur Verwaltung): Honoraraufträge nach HOAI, nach Aufwand oder pauschal – Abgleich mit der Zeiterfassung, Honorarangebot als PDF
+  honorar:
+    image: ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-v2026.11.314}
+    container_name: bauportal_ki_honorar
+    restart: unless-stopped
+    depends_on:
+      portal: { condition: service_started }
+      dienste: { condition: service_healthy }
+    ports:
+      - "${HONORAR_PUBLISH:-8103}:8103"
+    environment:
+      <<: *env
+      APP_MODULE: honorar
+      APP_PORT: "8103"
+    volumes:
+      - bautagebuch_data:/data   # gemeinsamer Dateispeicher (bpcore/dateien.py)
+
+  # Baudaten: Positionsdatenbank (Texte, DIN 276, Preise), importierte Kataloge (z. B. Sirados) und eigene Preise
+  baudaten:
+    image: ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-v2026.11.314}
+    container_name: bauportal_ki_baudaten
+    restart: unless-stopped
+    depends_on:
+      portal: { condition: service_started }
+      dienste: { condition: service_healthy }
+    ports:
+      - "${BAUDATEN_PUBLISH:-8099}:8099"
+    environment:
+      <<: *env
+      APP_MODULE: baudaten
+      APP_PORT: "8099"
+      APP_TIMEOUT: "600"
+    volumes:
+      - bautagebuch_data:/data   # gemeinsamer Dateispeicher (bpcore/dateien.py)
+
+  # ORCA-Import: ORCA-AVA-Projekte (Projektsicherung *.zip / *.ava) in die AVA übernehmen – nur für Administratoren,
+  # eigener Port (http://<Server>:8100). Ein Arbeitsprozess, weil die Vorschau im Speicher gehalten wird.
+  orca:
+    image: ghcr.io/matthiasknauff/bauplattform/plattform:${BP_VERSION:-v2026.11.314}
+    container_name: bauportal_ki_orca
+    restart: unless-stopped
+    depends_on:
+      portal: { condition: service_started }
+      dienste: { condition: service_healthy }
+    ports:
+      - "${ORCA_PUBLISH:-8100}:8100"
+    environment:
+      <<: *env
+      APP_MODULE: orca_import
+      APP_PORT: "8100"
+      APP_TIMEOUT: "900"
+    volumes:
+      - bautagebuch_data:/data   # gemeinsamer Dateispeicher (bpcore/dateien.py)
+
+  # Eigene KI im Büro (Ollama) – nur im Docker-Netz erreichbar, kein Port nach außen.
+  # Braucht für das Standardmodell qwen2.5:3b etwa 3 GB, für das Bildmodell qwen3-vl:4b (Pläne lesen) weitere ~4 GB freien Arbeitsspeicher;
+  # ohne Grafikkarte antwortet es langsamer (ein Plan: einige Minuten).
+  # Bauportal Office (beschlossen 17.11.2026: „Nextcloud Office“ = Collabora Online CODE): Word-/Excel-Dateien der Ablage in
+  # „Pläne & Dateien“ bearbeiten. Der Browser erreicht ihn unter <Bauportal-Adresse>/office (OFFICE_URL; im Nginx Proxy Manager beim
+  # Eintrag des Bauportals eine „Custom location“ /office auf Port 9980 mit WebSocket-Weiterleitung – kein eigener DNS-Eintrag). Dateien holt und speichert er nur beim Bautagebuch im Docker-Netz (WOPI, aliasgroup1) –
+  # kein Zugang zum Dateiserver, keine Zugangsdaten. Braucht etwa 1–2 GB Arbeitsspeicher.
+  office:
+    image: collabora/code:26.04.6.1.1
+    container_name: bauportal_ki_office
+    restart: unless-stopped
+    cap_add: [MKNOD]
+    ports:
+      - "${OFFICE_PUBLISH:-9980}:9980"
+    environment:
+      aliasgroup1: http://bautagebuch:8000
+      server_name: ${OFFICE_HOST:-}
+      DONT_GEN_SSL_CERT: "1"
+      dictionaries: de_DE en_GB en_US
+      extra_params: >-
+        --o:ssl.enable=false --o:ssl.termination=${OFFICE_SSL_TERMINATION:-false}
+        --o:net.frame_ancestors=${OFFICE_RAHMEN:-*}
+        --o:net.service_root=${OFFICE_PFAD:-/office} --o:welcome.enable=false
+      username: admin
+      password: ${OFFICE_ADMIN_PW:-}   # Verwaltung von Collabora (/browser/dist/admin/admin.html) – leer = aus
+      TZ: ${TZ:-Europe/Berlin}
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: bauportal_ki_ollama
+    profiles: ["ki"]
+    restart: unless-stopped
+    environment:
+      OLLAMA_KEEP_ALIVE: 30m          # Modell 30 Minuten im Speicher halten
+      OLLAMA_NUM_PARALLEL: "1"
+    volumes:
+      - ollama_data:/root/.ollama     # heruntergeladene Modelle
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # lädt einmal beim Start die Modelle (OLLAMA_MODEL, OLLAMA_VISION_MODEL) herunter und beendet sich dann – vorhandene Modelle werden nur geprüft
+  ollama_modell:
+    image: ollama/ollama:latest
+    container_name: bauportal_ki_ollama_modell
+    profiles: ["ki"]
+    restart: "no"
+    depends_on:
+      ollama: { condition: service_healthy }
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c", "ollama pull \"${OLLAMA_MODEL:-qwen2.5:3b}\" && echo \"Modell ${OLLAMA_MODEL:-qwen2.5:3b} bereit\"; V=\"${OLLAMA_VISION_MODEL-qwen3-vl:4b}\"; [ -z \"$$V\" ] || ollama pull \"$$V\" && echo \"Bildmodell $$V bereit\""]
+
+  # ---------------------------------------------------------------------------------------------- Claude-Agent (bauportal-ki)
+  # Eigene Oberfläche auf Port 8200. Anmeldung = Anmeldung der Bauportal-Kopie (Cookie gilt für alle Ports dieses Servers).
+  # Claude bedient die Kopie über deren eigene Schnittstellen – mit den Rechten der angemeldeten Person.
+  ki:
+    image: ghcr.io/matthiasknauff/bauportal-ki/ki:${KI_VERSION:-latest}
+    container_name: bauportal_ki_agent
+    restart: unless-stopped
+    depends_on:
+      dienste: { condition: service_healthy }
+    ports:
+      - "${KI_PUBLISH:-8200}:8200"
+    environment:
+      <<: *env
+      APP: ki
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY fehlt – in Portainer eintragen}
+      KI_MODELL: ${KI_MODELL:-claude-sonnet-5-5}
+      KI_DECKEL_EUR: ${KI_DECKEL_EUR:-50}
+      PROD_SSH: ${PROD_SSH:-}            # z. B. kopie@192.168.x.y – Docker 2, nur für „Echte Projekte neu holen“
+      PROD_DB_CONTAINER: ${PROD_DB_CONTAINER:-bauplattform_db}
+    volumes:
+      - ki_ssh:/root/.ssh                # Schlüssel für die Kopie (README → „Kopie einrichten“)
+
+volumes:   # eigene Volumes des Testservers – werden beim ersten Start leer angelegt
+  bautagebuch_data:
+    name: ${DATA_VOLUME:-bauportal_ki_data}
+  bautagebuch_pg18:
+    name: ${DB18_VOLUME:-bauportal_ki_pg18}   # PostgreSQL 18 (seit 15.11.2026); das alte Volume darüber bleibt unverändert liegen
+  ollama_data:
+    name: bauportal_ki_ollama      # Modelle der eigenen KI
+  ki_ssh:
+    name: bauportal_ki_ssh

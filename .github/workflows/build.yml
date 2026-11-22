@@ -1,0 +1,61 @@
+name: Build
+
+# Push auf main → Tests, Image bauen (auf dem Bauportal-Image der Version in BP_VERSION), Kurzkennung in server/stack.yml eintragen.
+# Portainer (Polling auf das Repo) bemerkt die Änderung und spielt die neue Version auf dem KI-LXC ein.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['server/**', '**.md']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Kern des Bauportals für die Tests (Anonymisierung, KI-Verbrauch) – das öffentliche Repo, Stand der Version in BP_VERSION
+      - name: Bauportal holen
+        run: git clone --depth 1 --branch "$(tr -d '[:space:]' < BP_VERSION)" https://github.com/MatthiasKnauff/bauplattform bp
+
+      - name: Tests
+        run: |
+          pip install flask pyyaml
+          BPCORE=bp/shared python3 -m unittest discover -s tests -v
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bauportal-Version lesen
+        id: bp
+        run: echo "v=$(tr -d '[:space:]' < BP_VERSION)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          build-args: BP_VERSION=${{ steps.bp.outputs.v }}
+          tags: ghcr.io/matthiasknauff/bauportal-ki/ki:${{ github.sha }},ghcr.io/matthiasknauff/bauportal-ki/ki:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Stand in server/stack.yml eintragen
+        run: |
+          BP=$(tr -d '[:space:]' < BP_VERSION)
+          sed -i -E "s#(bauportal-ki/ki:\\$\\{KI_VERSION:-)[^}]*#\\1${GITHUB_SHA}#; s#(bauplattform/plattform:\\$\\{BP_VERSION:-)[^}]*#\\1${BP}#" server/stack.yml
+          git config user.name "github-actions"; git config user.email "github-actions@users.noreply.github.com"
+          git add server/stack.yml
+          git diff --cached --quiet || { git commit -m "Stand ${GITHUB_SHA::7} in server/stack.yml"; git pull --rebase --autostash; git push; }
