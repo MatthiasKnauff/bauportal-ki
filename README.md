@@ -45,9 +45,8 @@ Alles, was an Claude geht, wird anonymisiert (`ki/schutz.py`, aufbauend auf dem 
 ## Einrichten (einmal)
 
 1. **LXC** mit Docker und Portainer-Agent anlegen (wie Docker 1/2). Etwa 8 GB RAM ohne Ollama.
-2. **Portainer → Stacks → Add stack → Repository**: dieses Repo, Datei `server/stack.yml`, „Automatic updates“ (Polling) an.
-   Weil das Repo privat ist: unter „Authentication“ einen GitHub-Token mit Leserecht eintragen und unter
-   Registries `ghcr.io` mit demselben Token (für das Image `bauportal-ki/ki`).
+2. **Portainer → Stacks → Add stack → Repository**: `https://github.com/MatthiasKnauff/bauportal-ki`, Datei `server/stack.yml`,
+   „Automatic updates“ (Polling) an. Das Repo und die Images sind öffentlich – kein Token nötig.
 3. **Umgebungsvariablen** im Stack:
 
    | Variable | Wert |
